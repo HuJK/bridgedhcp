@@ -228,6 +228,34 @@ func (m *Manager) DeleteStatic(name string, family int, id string) error {
 	return err
 }
 
+// RenewPD forces the interface's PD client to confirm/refresh its delegation
+// now (RENEW, then REBIND), keeping the same prefix.
+func (m *Manager) RenewPD(name string) error {
+	it, err := m.iface(name)
+	if err != nil {
+		return err
+	}
+	if it.pdc == nil {
+		return fmt.Errorf("interface %q has no PD client", name)
+	}
+	it.pdc.Renew()
+	return nil
+}
+
+// ReleasePD releases the interface's PD delegation (DHCPv6 RELEASE) and
+// re-solicits a fresh one.
+func (m *Manager) ReleasePD(name string) error {
+	it, err := m.iface(name)
+	if err != nil {
+		return err
+	}
+	if it.pdc == nil {
+		return fmt.Errorf("interface %q has no PD client", name)
+	}
+	it.pdc.Release()
+	return nil
+}
+
 // DeleteLease force-releases an active lease.
 func (m *Manager) DeleteLease(name string, ip netip.Addr) error {
 	it, err := m.iface(name)

@@ -30,8 +30,9 @@ func TestDHCPv4EndToEnd(t *testing.T) {
 	cfg := map[string]any{
 		"state_file": stateDir + "/state.json",
 		"interfaces": []map[string]any{{
-			"name": "bdh0",
-			"tag":  "it-v4",
+			"name":    "bdh0",
+			"tag":     "it-v4",
+			"prefix4": "192.168.77.1/24",
 			"dhcp4": map[string]any{
 				"pool_offset_start": 100,
 				"pool_offset_end":   150,
@@ -147,9 +148,10 @@ func TestSLAACKernelAutoconf(t *testing.T) {
 
 	cfg := map[string]any{
 		"interfaces": []map[string]any{{
-			"name":  "bdh1",
-			"slaac": true,
-			"ra":    map[string]any{"interval": "2s"},
+			"name":    "bdh1",
+			"prefix6": "fd71::1/64",
+			"slaac":   true,
+			"ra":      map[string]any{"interval": "2s"},
 		}},
 	}
 	d := startDaemon(t, cfg)
@@ -172,7 +174,8 @@ func TestDHCPv6Stateful(t *testing.T) {
 
 	cfg := map[string]any{
 		"interfaces": []map[string]any{{
-			"name": "bdh2",
+			"name":    "bdh2",
+			"prefix6": "fd72::1/64",
 			"dhcp6": map[string]any{
 				"pool_offset_start": 256,
 				"pool_offset_end":   511,
@@ -297,7 +300,26 @@ func TestPDLifecycle(t *testing.T) {
 		t.Fatal("PD address lost during roam")
 	}
 
-	// 3. loss-withdraw: the new network has no PD server. Confirmation
+	// 3. release-reacquire: the API release sends a RELEASE to the server,
+	// drops the prefix, then re-solicits a fresh one (the same prefix here).
+	d.clearEvents()
+	pdsrv.resetSeen()
+	d.ctl("pd-release", "bdh3")
+	waitFor(t, "RELEASE sent to server", 10*time.Second, func() bool {
+		return pdsrv.sawType(dhcpv6.MessageTypeRelease)
+	})
+	if ev := d.waitEvent("pd_prefix", 20*time.Second); ev["address"] != "fdaa:bb:cc:d0::1/64" {
+		t.Fatalf("re-acquired pd address %v", ev["address"])
+	}
+	if !pdsrv.sawType(dhcpv6.MessageTypeSolicit) {
+		t.Fatal("release did not re-solicit a fresh delegation")
+	}
+	waitFor(t, "PD address back on bdh3", 5*time.Second, func() bool {
+		out, _ := nsExecQuiet("", "ip", "-6", "addr", "show", "dev", "bdh3")
+		return strings.Contains(out, "fdaa:bb:cc:d0::1/64")
+	})
+
+	// 4. loss-withdraw: the new network has no PD server. Confirmation
 	// fails -> prefix withdrawn, address removed.
 	pdsrv.answering.Store(false)
 	d.clearEvents()
@@ -330,8 +352,9 @@ func TestUntaggedDomainOnBridge(t *testing.T) {
 
 	cfg := map[string]any{
 		"interfaces": []map[string]any{{
-			"name": "bdbr5",
-			"tag":  "vlan0",
+			"name":    "bdbr5",
+			"tag":     "vlan0",
+			"prefix4": "192.168.79.1/24",
 			"dhcp4": map[string]any{
 				"pool_offset_start": 100,
 				"pool_offset_end":   150,
@@ -397,7 +420,8 @@ func TestDNSForwarderAndRedirect(t *testing.T) {
 	upstream := startMockDNS(t)
 	cfg := map[string]any{
 		"interfaces": []map[string]any{{
-			"name": "bdh4",
+			"name":    "bdh4",
+			"prefix4": "192.168.78.1/24",
 			"dns": map[string]any{
 				"port":        5355,
 				"redirect_53": true,

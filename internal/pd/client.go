@@ -74,6 +74,7 @@ type Client struct {
 	binding    *Binding
 	serverDUID dhcpv6.DUID
 	startedAt  time.Time
+	releaseReq bool
 
 	wake chan struct{}
 	done chan struct{}
@@ -116,6 +117,31 @@ func (c *Client) Wakeup() {
 	case c.wake <- struct{}{}:
 	default:
 	}
+}
+
+// Renew forces an immediate confirmation of the held delegation (RENEW, then
+// REBIND) so its lifetime is refreshed without renumbering; with no binding
+// it just retries the SOLICIT sooner. It is Wakeup with intent.
+func (c *Client) Renew() { c.Wakeup() }
+
+// Release gives up the current delegation: the run loop sends a DHCPv6
+// RELEASE to the leasing server (best effort), drops the prefix, then
+// re-solicits a fresh one (which may be the same prefix). A no-op when no
+// delegation is held.
+func (c *Client) Release() {
+	c.mu.Lock()
+	c.releaseReq = true
+	c.mu.Unlock()
+	c.Wakeup()
+}
+
+// takeReleaseReq clears and returns the pending release request.
+func (c *Client) takeReleaseReq() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := c.releaseReq
+	c.releaseReq = false
+	return r
 }
 
 // Binding returns the live delegation, or nil.
@@ -175,6 +201,33 @@ func (c *Client) dropPrefix() {
 		log.Printf("pd[%s]: prefix %s lost", c.cfg.Uplink, b.Prefix)
 		c.callback(b.Prefix, false)
 	}
+}
+
+// maybeRelease honors a pending Release: it sends a best-effort DHCPv6
+// RELEASE to the leasing server (so the prefix is freed server-side) and
+// drops the held delegation. Returns true when it acted, signalling the
+// caller to return so the session re-solicits a fresh delegation. A pending
+// request with no held binding is consumed as a no-op.
+func (c *Client) maybeRelease(conn *net.UDPConn) bool {
+	if !c.takeReleaseReq() {
+		return false
+	}
+	c.mu.Lock()
+	b := c.binding
+	server := c.serverDUID
+	c.mu.Unlock()
+	if b == nil {
+		return false
+	}
+	if server != nil {
+		c.setState("releasing")
+		c.markStart()
+		log.Printf("pd[%s]: releasing prefix %s", c.cfg.Uplink, b.Prefix)
+		// best effort: drop regardless of whether the server replies
+		c.exchange(conn, dhcpv6.MessageTypeRelease, server, dhcpv6.MessageTypeReply)
+	}
+	c.dropPrefix()
+	return true
 }
 
 func (c *Client) run() {
@@ -258,6 +311,9 @@ func (c *Client) uplinkReady() bool {
 
 func (c *Client) sessionLoop(conn *net.UDPConn) {
 	for !c.stopped() {
+		if c.maybeRelease(conn) {
+			continue // delegation dropped; re-solicit a fresh one
+		}
 		c.mu.Lock()
 		binding := c.binding
 		c.mu.Unlock()
@@ -343,6 +399,9 @@ func (c *Client) acquireFresh(conn *net.UDPConn) bool {
 // Returns false on socket-level errors (caller reopens).
 func (c *Client) boundLoop(conn *net.UDPConn) bool {
 	for !c.stopped() {
+		if c.maybeRelease(conn) {
+			return true // dropped; sessionLoop re-solicits
+		}
 		c.mu.Lock()
 		b := c.binding
 		server := c.serverDUID
@@ -364,6 +423,9 @@ func (c *Client) boundLoop(conn *net.UDPConn) bool {
 			}
 			if !c.sleep(d) {
 				return true
+			}
+			if c.maybeRelease(conn) {
+				return true // released instead of renewing
 			}
 			// a wakeup within validity: re-confirm on the (possibly new)
 			// link — but only once the uplink is actually usable, so a

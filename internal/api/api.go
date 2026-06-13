@@ -46,6 +46,8 @@ func New(mgr *server.Manager, socketPath, key string) (*Server, error) {
 	mux.HandleFunc("POST /v1/ifaces/{iface}/statics/{family}", s.handlePutStatic)
 	mux.HandleFunc("DELETE /v1/ifaces/{iface}/statics/{family}/{id}", s.handleDeleteStatic)
 	mux.HandleFunc("DELETE /v1/ifaces/{iface}/leases/{ip}", s.handleDeleteLease)
+	mux.HandleFunc("POST /v1/ifaces/{iface}/pd/renew", s.handlePDRenew)
+	mux.HandleFunc("POST /v1/ifaces/{iface}/pd/release", s.handlePDRelease)
 	s.http = &http.Server{Handler: s.auth(mux)}
 	go s.http.Serve(ln)
 	return s, nil
@@ -150,6 +152,22 @@ func (s *Server) handleDeleteStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.mgr.DeleteStatic(r.PathValue("iface"), family, r.PathValue("id")); err != nil {
+		httpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handlePDRenew(w http.ResponseWriter, r *http.Request) {
+	if err := s.mgr.RenewPD(r.PathValue("iface")); err != nil {
+		httpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handlePDRelease(w http.ResponseWriter, r *http.Request) {
+	if err := s.mgr.ReleasePD(r.PathValue("iface")); err != nil {
 		httpError(w, http.StatusNotFound, err.Error())
 		return
 	}

@@ -121,7 +121,9 @@ commands:
   statics-replace <iface> <4|6>   (JSON {"statics":[...]} on stdin)
   static-put <iface> <4|6>        (JSON binding on stdin)
   static-del <iface> <4|6> <id>
-  lease-del <iface> <ip>`)
+  lease-del <iface> <ip>
+  pd-renew <iface>
+  pd-release <iface>`)
 		return 2
 	}
 	apiKey := *key
@@ -179,6 +181,10 @@ commands:
 		return do("DELETE", "/v1/ifaces/"+rest[1]+"/statics/"+rest[2]+"/"+rest[3], nil)
 	case cmd == "lease-del" && len(rest) == 3:
 		return do("DELETE", "/v1/ifaces/"+rest[1]+"/leases/"+rest[2], nil)
+	case cmd == "pd-renew" && len(rest) == 2:
+		return do("POST", "/v1/ifaces/"+rest[1]+"/pd/renew", nil)
+	case cmd == "pd-release" && len(rest) == 2:
+		return do("POST", "/v1/ifaces/"+rest[1]+"/pd/release", nil)
 	}
 	fmt.Fprintln(os.Stderr, "unknown command; run without arguments for usage")
 	return 2

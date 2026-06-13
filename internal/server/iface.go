@@ -46,14 +46,20 @@ type DNSConfig struct {
 
 // IfaceConfig is one served interface.
 type IfaceConfig struct {
-	Name  string
-	Tag   string // opaque, echoed in events/status (e.g. DroidVM vlan id)
-	DHCP4 DHCP4Config
-	DHCP6 DHCP6Config
-	SLAAC bool
-	RA    RAConfig // Enabled/Managed/Autonomous derived; lifetimes honored
-	PD    *PDConfig
-	DNS   *DNSConfig
+	Name string
+	Tag  string // opaque, echoed in events/status (e.g. DroidVM vlan id)
+	// Served VM-side prefixes (gateway address + length). These are the
+	// authoritative source for the DHCP pools and the SLAAC/RA prefix — they
+	// are NOT scraped off the interface's live addresses. Prefix6 is ignored
+	// when PD is configured: there the delegation result drives v6.
+	Prefix4 netip.Prefix
+	Prefix6 netip.Prefix
+	DHCP4   DHCP4Config
+	DHCP6   DHCP6Config
+	SLAAC   bool
+	RA      RAConfig // Enabled/Managed/Autonomous derived; lifetimes honored
+	PD      *PDConfig
+	DNS     *DNSConfig
 }
 
 func (c *IfaceConfig) normalize() error {
@@ -99,9 +105,9 @@ func (c *IfaceConfig) normalize() error {
 type env struct {
 	name      string
 	mac       func() net.HardwareAddr
-	v4        func() (netip.Prefix, bool)
-	v6        func() (netip.Prefix, bool) // pool/lease prefix (PD-aware)
-	v6all     func() []netip.Prefix       // every global v6 prefix (for RA)
+	v4        func() (netip.Prefix, bool) // configured pool/gateway prefix
+	v6        func() (netip.Prefix, bool) // pool/lease prefix (configured or PD)
+	v6all     func() []netip.Prefix       // served v6 prefix(es) for RA
 	linkLocal func() netip.Addr
 	write     func([]byte) error
 	done      <-chan struct{}
@@ -241,37 +247,43 @@ func (it *Iface) envMAC() net.HardwareAddr {
 	return net.HardwareAddr{0x02, 0, 0, 0, 0, 0}
 }
 
+// envV4 is the configured VM-side IPv4 prefix. The served prefix is
+// authoritative config, never scraped off the interface's live addresses.
 func (it *Iface) envV4() (netip.Prefix, bool) {
-	return it.snapshot().PrimaryV4()
+	if it.cfg.Prefix4.IsValid() {
+		return it.cfg.Prefix4, true
+	}
+	return netip.Prefix{}, false
 }
 
-// envV6 picks the lease/pool prefix: the PD-derived address when PD is
-// configured (only that prefix is ours to allocate from), otherwise the
-// first global prefix.
+// envV6 picks the lease/pool prefix: the live PD delegation when PD is
+// configured (invalid until one is held, dropped the moment it is lost),
+// otherwise the configured static prefix. The interface's live addresses
+// are never consulted.
 func (it *Iface) envV6() (netip.Prefix, bool) {
-	it.mu.Lock()
-	pdAddr := it.pdAddr
-	st := it.state
-	it.mu.Unlock()
 	if it.cfg.PD != nil {
+		it.mu.Lock()
+		pdAddr := it.pdAddr
+		it.mu.Unlock()
 		if pdAddr.IsValid() {
-			// confirm it is still on the interface
-			for _, p := range st.V6 {
-				if p.Masked() == pdAddr.Masked() {
-					return pdAddr, true
-				}
-			}
+			return pdAddr, true
 		}
 		return netip.Prefix{}, false
 	}
-	if len(st.V6) == 0 {
-		return netip.Prefix{}, false
+	if it.cfg.Prefix6.IsValid() {
+		return it.cfg.Prefix6, true
 	}
-	return st.V6[0], true
+	return netip.Prefix{}, false
 }
 
+// envV6All is the set of VM-side IPv6 prefixes RA advertises: the single
+// configured-or-PD prefix. Returning nothing while a PD delegation is absent
+// is what lets RA deprecate a prefix the moment PD loses it.
 func (it *Iface) envV6All() []netip.Prefix {
-	return it.snapshot().V6
+	if p, ok := it.envV6(); ok {
+		return []netip.Prefix{p}
+	}
+	return nil
 }
 
 func (it *Iface) envLinkLocal() netip.Addr {

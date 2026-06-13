@@ -114,6 +114,8 @@ unix socket with `Authorization: Bearer <key>`:
 | `POST /v1/ifaces/{if}/statics/{4\|6}` | upsert one static binding |
 | `DELETE /v1/ifaces/{if}/statics/{4\|6}/{id}` | delete one static binding |
 | `DELETE /v1/ifaces/{if}/leases/{ip}` | force-release a lease |
+| `POST /v1/ifaces/{if}/pd/renew` | refresh the PD delegation now (RENEW/REBIND, same prefix) |
+| `POST /v1/ifaces/{if}/pd/release` | release the PD delegation (RELEASE) and re-solicit |
 
 ## Building & testing
 

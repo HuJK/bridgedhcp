@@ -44,14 +44,20 @@ type File struct {
 
 // Iface is one served interface.
 type Iface struct {
-	Name  string  `json:"name"`
-	Tag   string  `json:"tag,omitempty"`
-	DHCP4 *Pool   `json:"dhcp4,omitempty"`
-	DHCP6 *Pool   `json:"dhcp6,omitempty"`
-	SLAAC bool    `json:"slaac,omitempty"`
-	PD    *PD     `json:"pd,omitempty"`
-	DNS   *DNS    `json:"dns,omitempty"`
-	RA    *RAOpts `json:"ra,omitempty"`
+	Name string `json:"name"`
+	Tag  string `json:"tag,omitempty"`
+	// Served VM-side gateway prefixes (e.g. "192.168.1.1/24", "fd00::1/64").
+	// Authoritative source for the DHCP pools and SLAAC/RA prefix; the
+	// interface's live addresses are never read. Prefix6 is ignored when pd
+	// is set (the delegation drives v6).
+	Prefix4 string  `json:"prefix4,omitempty"`
+	Prefix6 string  `json:"prefix6,omitempty"`
+	DHCP4   *Pool   `json:"dhcp4,omitempty"`
+	DHCP6   *Pool   `json:"dhcp6,omitempty"`
+	SLAAC   bool    `json:"slaac,omitempty"`
+	PD      *PD     `json:"pd,omitempty"`
+	DNS     *DNS    `json:"dns,omitempty"`
+	RA      *RAOpts `json:"ra,omitempty"`
 
 	Statics4 []server.StaticBinding `json:"statics4,omitempty"`
 	Statics6 []server.StaticBinding `json:"statics6,omitempty"`
@@ -158,6 +164,20 @@ func (f *File) BuildIfaceConfigs() ([]server.IfaceConfig, error) {
 	out := make([]server.IfaceConfig, 0, len(f.Interfaces))
 	for _, ic := range f.Interfaces {
 		cfg := server.IfaceConfig{Name: ic.Name, Tag: ic.Tag, SLAAC: ic.SLAAC}
+		if ic.Prefix4 != "" {
+			p, err := netip.ParsePrefix(strings.TrimSpace(ic.Prefix4))
+			if err != nil || !p.Addr().Is4() {
+				return nil, fmt.Errorf("%s: prefix4 %q invalid", ic.Name, ic.Prefix4)
+			}
+			cfg.Prefix4 = p
+		}
+		if ic.Prefix6 != "" {
+			p, err := netip.ParsePrefix(strings.TrimSpace(ic.Prefix6))
+			if err != nil || !p.Addr().Is6() {
+				return nil, fmt.Errorf("%s: prefix6 %q invalid", ic.Name, ic.Prefix6)
+			}
+			cfg.Prefix6 = p
+		}
 		if ic.DHCP4 != nil {
 			dns, err := parseAddrs(ic.DHCP4.DNS, "dhcp4 dns")
 			if err != nil {

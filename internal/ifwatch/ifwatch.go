@@ -1,8 +1,8 @@
 // Package ifwatch tracks link and address state of served interfaces via
-// netlink subscription. Servers derive every prefix-dependent piece of
-// config (pools, static leases, RA prefixes) from the snapshot, so an
-// address added or removed — by the admin, or by the PD client — is the
-// single source of truth.
+// netlink subscription. Servers use the snapshot for link properties (MAC,
+// link-local, up/exists) and to learn when those change. Served prefixes
+// (DHCP pools, SLAAC/RA) are NOT taken from here: they come from static
+// config or the PD delegation result (see server.IfaceConfig).
 package ifwatch
 
 import (
@@ -23,14 +23,6 @@ type State struct {
 	V4        []netip.Prefix // global IPv4 addresses (address + prefix len)
 	V6        []netip.Prefix // global IPv6 addresses
 	LinkLocal netip.Addr     // IPv6 link-local address
-}
-
-// PrimaryV4 returns the first IPv4 address or the zero prefix.
-func (s State) PrimaryV4() (netip.Prefix, bool) {
-	if len(s.V4) == 0 {
-		return netip.Prefix{}, false
-	}
-	return s.V4[0], true
 }
 
 // Snapshot reads the named interface's state directly from netlink.
